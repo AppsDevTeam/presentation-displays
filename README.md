@@ -59,7 +59,7 @@ dependencies:
   presentation_displays:
     git:
       url: https://github.com/AppsDevTeam/presentation-displays.git
-      ref: master
+      ref: v1.1.0
 ```
 
 Pin `ref` to a tag or commit for reproducible builds.
