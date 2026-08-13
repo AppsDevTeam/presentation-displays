@@ -1,7 +1,6 @@
 // android/src/main/kotlin/com/namit/presentation_displays/PresentationDisplaysPlugin.kt
 package com.namit.presentation_displays
 
-import android.content.ContentValues.TAG
 import android.content.Context
 import android.hardware.display.DisplayManager
 import android.os.Handler
@@ -50,56 +49,19 @@ class PresentationDisplaysPlugin :
 	override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
 		channel.setMethodCallHandler(null)
 		eventChannel.setStreamHandler(null)
+		dismissPresentation()
 		flutterEngineChannel = null
 		flutterBinding = null
 	}
 
 	override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
-		Log.i(TAG, "Channel: method: ${call.method} | arguments: ${call.arguments}")
-		val channelMainName = "main_display_channel"
+		Log.i(LOG_TAG, "Channel: method: ${call.method} | arguments: ${call.arguments}")
 
 		when (call.method) {
-			"showPresentation" -> {
-				try {
-					val obj = JSONObject(call.arguments as String)
-					val displayId = obj.getInt("displayId")
-					val routeTag = obj.getString("routerName")
-					val display = displayManager?.getDisplay(displayId)
-
-					if (display != null) {
-						val dataToMainCallback: (Any?) -> Unit = { argument ->
-							flutterBinding?.let { binding ->
-								MethodChannel(binding.binaryMessenger, channelMainName)
-									.invokeMethod("dataToMain", argument)
-							}
-						}
-
-						val flutterEngine = createFlutterEngine(routeTag)
-						if (flutterEngine != null) {
-							flutterEngineChannel = MethodChannel(
-								flutterEngine.dartExecutor.binaryMessenger,
-								"${VIEW_TYPE_ID}_engine"
-							)
-							presentation = context?.let { ctx ->
-								PresentationDisplay(ctx, routeTag, display, dataToMainCallback)
-							}
-							Log.i(TAG, "presentation: $presentation")
-							presentation?.show()
-							result.success(true)
-						} else {
-							result.error("404", "Can't find FlutterEngine", null)
-						}
-					} else {
-						result.error("404", "Can't find display with displayId=$displayId", null)
-					}
-				} catch (e: Exception) {
-					result.error(call.method, e.message, null)
-				}
-			}
+			"showPresentation" -> showPresentation(call, result)
 			"hidePresentation" -> {
 				try {
-					presentation?.dismiss()
-					presentation = null
+					dismissPresentation()
 					result.success(true)
 				} catch (e: Exception) {
 					result.error(call.method, e.message, null)
@@ -126,22 +88,103 @@ class PresentationDisplaysPlugin :
 		}
 	}
 
-	private fun createFlutterEngine(tag: String): FlutterEngine? {
-		val ctx = context ?: return null
+	private fun showPresentation(call: MethodCall, result: MethodChannel.Result) {
+		try {
+			val obj = JSONObject(call.arguments as String)
+			val displayId = obj.getInt("displayId")
+			val routeTag = obj.getString("routerName")
+			val display = displayManager?.getDisplay(displayId)
 
-		if (FlutterEngineCache.getInstance().get(tag) == null) {
-			val flutterEngine = FlutterEngine(ctx)
-			flutterEngine.navigationChannel.setInitialRoute(tag)
+			if (display == null) {
+				result.error("404", "Can't find display with displayId=$displayId", null)
+				return
+			}
 
-			FlutterInjector.instance().flutterLoader().startInitialization(ctx)
-			val path = FlutterInjector.instance().flutterLoader().findAppBundlePath()
-			val entrypoint = DartExecutor.DartEntrypoint(path, "secondaryDisplayMain")
-			flutterEngine.dartExecutor.executeDartEntrypoint(entrypoint)
-			flutterEngine.lifecycleChannel.appIsResumed()
+			// A presentation left over from an earlier show() keeps its FlutterView attached
+			// to the shared cached engine. Building a new one on top of it would attach a
+			// second view to the same engine and leave a dead window on the display.
+			dismissPresentation()
 
-			FlutterEngineCache.getInstance().put(tag, flutterEngine)
+			val flutterEngine = createFlutterEngine(routeTag)
+
+			if (flutterEngine == null) {
+				result.error("404", "Can't find FlutterEngine", null)
+				return
+			}
+
+			// Presentation is a Dialog, so it needs the activity context — the application
+			// context has no window token and show() would throw BadTokenException.
+			val activityContext = context
+
+			if (activityContext == null) {
+				result.error("500", "Plugin is not attached to an activity", null)
+				return
+			}
+
+			flutterEngineChannel = MethodChannel(
+				flutterEngine.dartExecutor.binaryMessenger,
+				"${VIEW_TYPE_ID}_engine"
+			)
+
+			val dataToMainCallback: (Any?) -> Unit = { argument ->
+				flutterBinding?.let { binding ->
+					MethodChannel(binding.binaryMessenger, MAIN_DISPLAY_CHANNEL)
+						.invokeMethod("dataToMain", argument)
+				}
+			}
+
+			val newPresentation = PresentationDisplay(activityContext, routeTag, display, dataToMainCallback)
+			newPresentation.show()
+			presentation = newPresentation
+
+			Log.i(LOG_TAG, "presentation shown on displayId=$displayId")
+
+			result.success(true)
+		} catch (e: Exception) {
+			// Reported as a failure instead of success(true) so the Dart side can tell a
+			// shown presentation from one that never made it onto the display.
+			Log.e(LOG_TAG, "showPresentation failed: ${e.message}")
+			result.error(call.method, e.message, null)
 		}
-		return FlutterEngineCache.getInstance().get(tag)
+	}
+
+	private fun dismissPresentation() {
+		presentation?.let { current ->
+			try {
+				current.dismiss()
+			} catch (e: Exception) {
+				Log.w(LOG_TAG, "Failed to dismiss presentation: ${e.message}")
+			}
+		}
+		presentation = null
+	}
+
+	private fun createFlutterEngine(tag: String): FlutterEngine? {
+		val appContext = flutterBinding?.applicationContext
+			?: context?.applicationContext
+			?: return null
+
+		FlutterEngineCache.getInstance().get(tag)?.let { return it }
+
+		// The loader has to be initialized before the engine is constructed. The other way
+		// round, FlutterEngine's constructor calls FlutterJNI.attachToNative() against an
+		// uninitialized loader, which crashes natively in flutter::AttachJNI.
+		val loader = FlutterInjector.instance().flutterLoader()
+		loader.startInitialization(appContext)
+		loader.ensureInitializationComplete(appContext, null)
+
+		// The application context outlives activity recreation — an activity context here
+		// leaves the engine holding a destroyed activity.
+		val flutterEngine = FlutterEngine(appContext)
+		flutterEngine.navigationChannel.setInitialRoute(tag)
+
+		val entrypoint = DartExecutor.DartEntrypoint(loader.findAppBundlePath(), SECONDARY_ENTRYPOINT)
+		flutterEngine.dartExecutor.executeDartEntrypoint(entrypoint)
+		flutterEngine.lifecycleChannel.appIsResumed()
+
+		FlutterEngineCache.getInstance().put(tag, flutterEngine)
+
+		return flutterEngine
 	}
 
 	/* ActivityAware */
@@ -149,16 +192,29 @@ class PresentationDisplaysPlugin :
 		context = binding.activity
 		displayManager = context?.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
 	}
-	override fun onDetachedFromActivityForConfigChanges() { context = null }
+
+	override fun onDetachedFromActivityForConfigChanges() {
+		// The presentation is tied to the activity that created it, so it must not outlive it.
+		dismissPresentation()
+		context = null
+	}
+
 	override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
 		context = binding.activity
 		displayManager = context?.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
 	}
-	override fun onDetachedFromActivity() { context = null }
+
+	override fun onDetachedFromActivity() {
+		dismissPresentation()
+		context = null
+	}
 
 	companion object {
+		private const val LOG_TAG = "PresentationDisplays"
 		private const val VIEW_TYPE_ID = "presentation_displays_plugin"
 		private const val VIEW_TYPE_EVENTS_ID = "presentation_displays_plugin_events"
+		private const val MAIN_DISPLAY_CHANNEL = "main_display_channel"
+		private const val SECONDARY_ENTRYPOINT = "secondaryDisplayMain"
 		private var displayManager: DisplayManager? = null
 	}
 }
@@ -170,8 +226,8 @@ class DisplayConnectedStreamHandler(private var displayManager: DisplayManager?)
 	private var handler: Handler? = null
 
 	private val displayListener = object : DisplayManager.DisplayListener {
-		override fun onDisplayAdded(displayId: Int)  { sink?.success(1) }
-		override fun onDisplayRemoved(displayId: Int){ sink?.success(0) }
+		override fun onDisplayAdded(displayId: Int) { sink?.success(1) }
+		override fun onDisplayRemoved(displayId: Int) { sink?.success(0) }
 		override fun onDisplayChanged(p0: Int) {}
 	}
 
