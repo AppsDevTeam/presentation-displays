@@ -239,6 +239,16 @@ Flutter versions reject — it now uses the declarative `plugins { }` block, AGP
 and Gradle 8.14.3. Jetifier is disabled: the project is AndroidX only, and jetifying the Flutter
 engine jars exhausts the heap.
 
+### Releasing a new version
+
+```bash
+./scripts/release.sh v1.1.0
+```
+
+The script bumps `version:` in `pubspec.yaml`, rewrites the `ref:` in this README's install
+snippet, commits as `Release vX.Y.Z`, tags, and pushes both the commit and the tag. It refuses to
+run on a dirty working tree or when the tag already exists.
+
 ### Testing against a real app
 
 To verify a change against an existing app instead, point a `dependency_overrides` entry at a local
