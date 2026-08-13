@@ -162,9 +162,22 @@ await displayManager.hideSecondaryDisplay(displayId: displayId);
 
 ## Development
 
-The `example/` project still uses the imperative Gradle plugin apply that recent Flutter versions
-reject, so it does not build as-is. To verify changes, add a `dependency_overrides` entry pointing at
-a local checkout and build a real app against it:
+### Running the example
+
+```bash
+cd example
+flutter run
+```
+
+The example's Android build was migrated off the imperative `apply from:` Gradle setup that recent
+Flutter versions reject — it now uses the declarative `plugins { }` block, AGP 8.11.1, Kotlin 2.2.20
+and Gradle 8.14.3. Jetifier is disabled: the project is AndroidX only, and jetifying the Flutter
+engine jars exhausts the heap.
+
+### Testing against a real app
+
+To verify a change against an existing app instead, point a `dependency_overrides` entry at a local
+checkout:
 
 ```yaml
 dependency_overrides:
