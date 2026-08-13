@@ -2,192 +2,191 @@ import Flutter
 import UIKit
 
 public class SwiftPresentationDisplaysPlugin: NSObject, FlutterPlugin {
-    var additionalWindows = [UIScreen:UIWindow]()
-    var screens = [UIScreen]()
-    var flutterEngineChannel:FlutterMethodChannel?=nil
-    public static var controllerAdded: ((FlutterViewController)->Void)?
 
-    public override init() {
-        super.init()
+    /// Called with the `FlutterViewController` created for an external display, so the host app
+    /// can register its plugins on the secondary engine:
+    ///
+    /// ```swift
+    /// SwiftPresentationDisplaysPlugin.controllerAdded = { controller in
+    ///     GeneratedPluginRegistrant.register(with: controller)
+    /// }
+    /// ```
+    ///
+    /// Optional — a presentation without app plugins still renders.
+    public static var controllerAdded: ((FlutterViewController) -> Void)?
 
-        screens.append(UIScreen.main)
-        NotificationCenter.default.addObserver(forName: UIScreen.didConnectNotification,
-                                               object: nil, queue: nil) {
-            notification in
+    private static let mainDisplayChannelName = "main_display_channel"
+    private static let secondaryEntrypoint = "secondaryDisplayMain"
 
-            // Get the new screen information.
-            guard let newScreen = notification.object as? UIScreen else {
-                    return
-                  }
+    private var flutterEngineChannel: FlutterMethodChannel?
+    private var mainDisplayChannel: FlutterMethodChannel?
+    private var secondaryEngine: FlutterEngine?
 
-            let screenDimensions = newScreen.bounds
-            // Configure a window for the screen.
-            let newWindow = UIWindow(frame: screenDimensions)
-            newWindow.screen = newScreen
-
-            // You must show the window explicitly.
-            newWindow.isHidden = true
-
-            // Save a reference to the window in a local array.
-            self.screens.append(newScreen)
-            self.additionalWindows[newScreen] = newWindow
-
-        }
-
-        NotificationCenter.default.addObserver(forName:
-                                                UIScreen.didDisconnectNotification,
-                                               object: nil,
-                                               queue: nil) { notification in
-            guard let screen = notification.object as? UIScreen else {
-                    return
-                  }
-
-           // Remove the window associated with the screen.
-                 for s in self.screens {
-                   if s == screen {
-                     if let index = self.screens.firstIndex(of: s) {
-                       self.screens.remove(at: index)
-                       // Remove the window and its contents.
-                       self.additionalWindows.removeValue(forKey: s)
-                     }
-                   }
-                 }
-        }
-    }
-    
     public static func register(with registrar: FlutterPluginRegistrar) {
-        let channel = FlutterMethodChannel(name: "presentation_displays_plugin", binaryMessenger: registrar.messenger())
+        let channel = FlutterMethodChannel(
+            name: "presentation_displays_plugin",
+            binaryMessenger: registrar.messenger()
+        )
         let instance = SwiftPresentationDisplaysPlugin()
+        instance.mainDisplayChannel = FlutterMethodChannel(
+            name: mainDisplayChannelName,
+            binaryMessenger: registrar.messenger()
+        )
         registrar.addMethodCallDelegate(instance, channel: channel)
-        
-        let eventChannel = FlutterEventChannel(name: "presentation_displays_plugin_events", binaryMessenger: registrar.messenger())
-        let displayConnectedStreamHandler = DisplayConnectedStreamHandler()
-        eventChannel.setStreamHandler(displayConnectedStreamHandler)
+
+        let eventChannel = FlutterEventChannel(
+            name: "presentation_displays_plugin_events",
+            binaryMessenger: registrar.messenger()
+        )
+        eventChannel.setStreamHandler(DisplayConnectedStreamHandler())
     }
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
-        if call.method == "listDisplay" {
-            var jsonDisplaysList = "[";
-            for i in 0..<screens.count {
-                jsonDisplaysList+="{\"displayId\":"+String(i)+", \"name\":\"Screen "+String(i)+"\"},"
-            }
-            jsonDisplaysList = String(jsonDisplaysList.dropLast())
-            jsonDisplaysList+="]"
-            jsonDisplaysList = jsonDisplaysList.replacingOccurrences(of: "Screen 0", with: "Built-in Screen")
-            result(jsonDisplaysList)
+        guard #available(iOS 13.0, *) else {
+            result(FlutterError(code: "unsupported", message: "Requires iOS 13 or newer", details: nil))
+            return
         }
-        else if call.method=="showPresentation"{
-            let args = call.arguments as? String
-            let data = args?.data(using: .utf8)!
+
+        switch call.method {
+        case "listDisplay":
+            let category = call.arguments as? String
+            let includeBuiltIn = category != "android.hardware.display.category.PRESENTATION"
+            let displays = PresentationDisplaysRegistry.shared.displays(includingBuiltIn: includeBuiltIn)
+
             do {
-                if let json = try JSONSerialization.jsonObject(with: data ?? Data(), options : .allowFragments) as? Dictionary<String,Any>
-                {
-                    print(json)
-                    showPresentation(index:json["displayId"] as? Int ?? 1, routerName: json["routerName"] as? String ?? "presentation")
-                    result(true)
-                }
-                else {
-                    print("bad json")
-                    result(false)
-                }
+                let json = try JSONSerialization.data(withJSONObject: displays, options: [])
+                result(String(data: json, encoding: .utf8) ?? "[]")
+            } catch {
+                result(FlutterError(code: call.method, message: error.localizedDescription, details: nil))
             }
-            catch let error as NSError {
-                print(error)
-                result(false)
+
+        case "showPresentation":
+            guard let json = decode(call.arguments) else {
+                result(FlutterError(code: call.method, message: "Malformed arguments", details: nil))
+                return
             }
-        }
-        else if call.method=="hidePresentation"{
-            let args = call.arguments as? String
-            let data = args?.data(using: .utf8)!
-            do {
-                if let json = try JSONSerialization.jsonObject(with: data ?? Data(), options : .allowFragments) as? Dictionary<String,Any>
-                {
-                    print(json)
-                    hidePresentation(index:json["displayId"] as? Int ?? 1)
-                    result(true)
-                }
-                else {
-                    print("bad json")
-                    result(false)
-                }
-            }
-            catch let error as NSError {
-                print(error)
-                result(false)
-            }
-        }
-        else if call.method=="transferDataToPresentation"{
-            self.flutterEngineChannel?.invokeMethod("DataTransfer", arguments: call.arguments)
+
+            let displayId = json["displayId"] as? Int ?? 1
+            let routerName = json["routerName"] as? String ?? "presentation"
+
+            showPresentation(displayId: displayId, routerName: routerName, result: result)
+
+        case "hidePresentation":
+            let displayId = decode(call.arguments)?["displayId"] as? Int ?? 1
+
+            hidePresentation(displayId: displayId)
             result(true)
-        }
-        else
-        {
+
+        case "transferDataToPresentation":
+            flutterEngineChannel?.invokeMethod("DataTransfer", arguments: call.arguments)
+            result(true)
+
+        default:
             result(FlutterMethodNotImplemented)
         }
-
     }
 
-    private func showPresentation(index:Int, routerName:String )
-    {
-        if index>0 && index < self.screens.count && self.additionalWindows.keys.contains(self.screens[index])
-        {
-            let screen=self.screens[index]
-            let window=self.additionalWindows[screen]
+    // MARK: - Private
 
-            if (window != nil){
-                window!.isHidden=false
-                if (window!.rootViewController == nil || !(window!.rootViewController is FlutterViewController)){
-                    let extVC = FlutterViewController(project: nil, initialRoute: routerName, nibName: nil, bundle: nil)
-                    SwiftPresentationDisplaysPlugin.controllerAdded!(extVC)
-                    window?.rootViewController = extVC
+    private func decode(_ arguments: Any?) -> [String: Any]? {
+        guard let string = arguments as? String, let data = string.data(using: .utf8) else {
+            return nil
+        }
 
-                    self.flutterEngineChannel = FlutterMethodChannel(name: "presentation_displays_plugin_engine", binaryMessenger: extVC.binaryMessenger)
-                }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
+    @available(iOS 13.0, *)
+    private func showPresentation(displayId: Int, routerName: String, result: @escaping FlutterResult) {
+        let registry = PresentationDisplaysRegistry.shared
+
+        guard let scene = registry.scene(forDisplayId: displayId) else {
+            // Reported as an error rather than false, so the Dart side can tell a shown
+            // presentation from one that never made it onto the display.
+            result(FlutterError(
+                code: "404",
+                message: "Can't find display with displayId=\(displayId)",
+                details: nil
+            ))
+            return
+        }
+
+        // Tear down a window left over from an earlier show on the same display.
+        hidePresentation(displayId: displayId)
+
+        // A dedicated engine running the secondary entry point, matching Android. The engine
+        // outlives hide/show so the secondary UI keeps its state.
+        let engine = secondaryEngine ?? FlutterEngine(name: "presentation_displays_engine")
+
+        if secondaryEngine == nil {
+            engine.run(withEntrypoint: SwiftPresentationDisplaysPlugin.secondaryEntrypoint, initialRoute: routerName)
+            secondaryEngine = engine
+        }
+
+        let controller = FlutterViewController(engine: engine, nibName: nil, bundle: nil)
+        SwiftPresentationDisplaysPlugin.controllerAdded?(controller)
+
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = controller
+        window.isHidden = false
+        registry.setWindow(window, forDisplayId: displayId)
+
+        flutterEngineChannel = FlutterMethodChannel(
+            name: "presentation_displays_plugin_engine",
+            binaryMessenger: engine.binaryMessenger
+        )
+
+        // Back-channel from the secondary display to the main app, matching the Android side.
+        FlutterMethodChannel(
+            name: SwiftPresentationDisplaysPlugin.mainDisplayChannelName,
+            binaryMessenger: engine.binaryMessenger
+        ).setMethodCallHandler { [weak self] call, reply in
+            if call.method == "transferDataToMain" {
+                self?.mainDisplayChannel?.invokeMethod("dataToMain", arguments: call.arguments)
+                reply(nil)
+            } else {
+                reply(FlutterMethodNotImplemented)
             }
         }
+
+        result(true)
     }
 
-    private func hidePresentation(index:Int)
-    {
-        if index>0 && index < self.screens.count && self.additionalWindows.keys.contains(self.screens[index])
-        {
-            let screen=self.screens[index]
-            let window=self.additionalWindows[screen]
+    @available(iOS 13.0, *)
+    private func hidePresentation(displayId: Int) {
+        let registry = PresentationDisplaysRegistry.shared
 
-            window?.isHidden=true
-        }
+        guard let window = registry.window(forDisplayId: displayId) else { return }
+
+        window.isHidden = true
+        window.rootViewController = nil
+        registry.setWindow(nil, forDisplayId: displayId)
     }
-
 }
 
-class DisplayConnectedStreamHandler: NSObject, FlutterStreamHandler{
-    var sink: FlutterEventSink?
-    var didConnectObserver: NSObjectProtocol?
-    var didDisconnectObserver: NSObjectProtocol?
+class DisplayConnectedStreamHandler: NSObject, FlutterStreamHandler {
+
+    private var sink: FlutterEventSink?
 
     func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
         sink = events
-        didConnectObserver = NotificationCenter.default.addObserver(forName: UIScreen.didConnectNotification,
-                            object: nil, queue: nil) { (notification) in
-            guard let sink = self.sink else { return }
-            sink(1)
-           }
-        didDisconnectObserver = NotificationCenter.default.addObserver(forName: UIScreen.didDisconnectNotification,
-                            object: nil, queue: nil) { (notification) in
-            guard let sink = self.sink else { return }
-            sink(0)
-           }
+
+        guard #available(iOS 13.0, *) else { return nil }
+
+        PresentationDisplaysRegistry.shared.onConnectionChanged = { [weak self] event in
+            self?.sink?(event)
+        }
+
         return nil
     }
 
     func onCancel(withArguments arguments: Any?) -> FlutterError? {
         sink = nil
-        if (didConnectObserver != nil){
-            NotificationCenter.default.removeObserver(didConnectObserver!)
+
+        if #available(iOS 13.0, *) {
+            PresentationDisplaysRegistry.shared.onConnectionChanged = nil
         }
-        if (didDisconnectObserver != nil){
-            NotificationCenter.default.removeObserver(didDisconnectObserver!)
-        }
+
         return nil
     }
 }

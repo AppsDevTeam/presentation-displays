@@ -37,6 +37,21 @@ The fixes below are not in any other published fork — every fork of the origin
 Everything ZonalUS added over the original is kept, including `transferDataToMain` — the back-channel
 from the secondary display to the main app, which the original does not have.
 
+### iOS: migrated to the UIScene lifecycle
+
+The iOS half was built on `UIScreen.didConnectNotification` and `UIWindow.screen`, which Apple
+deprecated when scenes were introduced. Under the scene lifecycle those notifications no longer
+produce a usable window, so external display support was effectively dead on modern iOS.
+
+It now uses `UIWindowScene`: a `PresentationDisplaysSceneDelegate` picks up the external display
+scene, the plugin creates a `UIWindow(windowScene:)` for it, and connect/disconnect events come
+from the scene delegate instead of `NotificationCenter`. Along the way iOS gained parity with
+Android — a dedicated engine running the `secondaryDisplayMain` entry point, real JSON from
+`listDisplay` including `flags`, `transferDataToMain` support, and errors instead of a bare `false`.
+
+The minimum deployment target is now **iOS 13**. `controllerAdded` is no longer force-unwrapped, so
+an app that does not set it no longer crashes.
+
 ## Installation
 
 ```yaml
@@ -66,6 +81,54 @@ void secondaryDisplayMain() {
 This engine is a full second instance of your app: it initializes its own plugins, its own database
 handles and its own Firebase. Keep its bootstrap minimal and do not assume it shares state with the
 main engine.
+
+### 1b. iOS only — opt into the scene lifecycle
+
+External displays on iOS are delivered as scenes, so the host app has to declare them. Add to
+`ios/Runner/Info.plist`:
+
+```xml
+<key>UIApplicationSceneManifest</key>
+<dict>
+    <key>UIApplicationSupportsMultipleScenes</key>
+    <true/>
+    <key>UISceneConfigurations</key>
+    <dict>
+        <key>UIWindowSceneSessionRoleApplication</key>
+        <array>
+            <dict>
+                <key>UISceneConfigurationName</key>
+                <string>Default Configuration</string>
+                <key>UISceneDelegateClassName</key>
+                <string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
+            </dict>
+        </array>
+        <key>UIWindowSceneSessionRoleExternalDisplayNonInteractive</key>
+        <array>
+            <dict>
+                <key>UISceneConfigurationName</key>
+                <string>External Display</string>
+                <key>UISceneDelegateClassName</key>
+                <string>presentation_displays.PresentationDisplaysSceneDelegate</string>
+            </dict>
+        </array>
+    </dict>
+</dict>
+```
+
+Declaring a scene manifest opts the whole app into the scene lifecycle, so the **main** window must
+be created by your own `SceneDelegate` rather than in `AppDelegate` — see
+`example/ios/Runner/SceneDelegate.swift`.
+
+To let the secondary engine use your app's plugins, set the hook in `AppDelegate`:
+
+```swift
+SwiftPresentationDisplaysPlugin.controllerAdded = { controller in
+    GeneratedPluginRegistrant.register(with: controller)
+}
+```
+
+Android needs none of this.
 
 ### 2. Find the display
 
@@ -158,7 +221,9 @@ await displayManager.hideSecondaryDisplay(displayId: displayId);
   `transferDataToMain` periodically and treat a missing beat as a dead presentation.
 - **The cached engine is never destroyed.** It is reused across `show()`/`hide()` cycles for the
   lifetime of the process, which is what makes state survive a hide/show.
-- **iOS support is inherited from upstream and untested in this fork.** These fixes are Android only.
+- **The iOS side compiles but has not been exercised on real hardware.** The UIScene migration was
+  verified by building the example for the simulator; a simulator cannot attach a physical external
+  display, so the runtime path is unproven. The Android side is the tested one.
 
 ## Development
 
