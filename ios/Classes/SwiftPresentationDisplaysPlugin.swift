@@ -68,8 +68,9 @@ public class SwiftPresentationDisplaysPlugin: NSObject, FlutterPlugin {
 
             let displayId = json["displayId"] as? Int ?? 1
             let routerName = json["routerName"] as? String ?? "presentation"
+            let recreateEngine = json["recreateEngine"] as? Bool ?? false
 
-            showPresentation(displayId: displayId, routerName: routerName, result: result)
+            showPresentation(displayId: displayId, routerName: routerName, recreateEngine: recreateEngine, result: result)
 
         case "hidePresentation":
             let displayId = decode(call.arguments)?["displayId"] as? Int ?? 1
@@ -80,6 +81,10 @@ public class SwiftPresentationDisplaysPlugin: NSObject, FlutterPlugin {
         case "transferDataToPresentation":
             flutterEngineChannel?.invokeMethod("DataTransfer", arguments: call.arguments)
             result(true)
+
+        case "setLoggingEnabled":
+            // The iOS side writes no log of its own; accepted so the call works on both platforms.
+            result(nil)
 
         default:
             result(FlutterMethodNotImplemented)
@@ -97,7 +102,7 @@ public class SwiftPresentationDisplaysPlugin: NSObject, FlutterPlugin {
     }
 
     @available(iOS 13.0, *)
-    private func showPresentation(displayId: Int, routerName: String, result: @escaping FlutterResult) {
+    private func showPresentation(displayId: Int, routerName: String, recreateEngine: Bool, result: @escaping FlutterResult) {
         let registry = PresentationDisplaysRegistry.shared
 
         guard let scene = registry.scene(forDisplayId: displayId) else {
@@ -113,6 +118,14 @@ public class SwiftPresentationDisplaysPlugin: NSObject, FlutterPlugin {
 
         // Tear down a window left over from an earlier show on the same display.
         hidePresentation(displayId: displayId)
+
+        // Starts the secondary entry point anew instead of reusing an engine whose isolate
+        // may have died, matching Android.
+        if recreateEngine, let engine = secondaryEngine {
+            flutterEngineChannel = nil
+            engine.destroyContext()
+            secondaryEngine = nil
+        }
 
         // A dedicated engine running the secondary entry point, matching Android. The engine
         // outlives hide/show so the secondary UI keeps its state.

@@ -5,7 +5,6 @@ import android.content.Context
 import android.hardware.display.DisplayManager
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
 import android.view.Display
 import androidx.annotation.NonNull
 import com.google.gson.Gson
@@ -55,9 +54,13 @@ class PresentationDisplaysPlugin :
 	}
 
 	override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
-		Log.i(LOG_TAG, "Channel: method: ${call.method} | arguments: ${call.arguments}")
+		PresentationDisplaysLog.i { "Channel: method: ${call.method} | arguments: ${call.arguments}" }
 
 		when (call.method) {
+			"setLoggingEnabled" -> {
+				PresentationDisplaysLog.enabled = call.arguments as? Boolean ?: false
+				result.success(null)
+			}
 			"showPresentation" -> showPresentation(call, result)
 			"hidePresentation" -> {
 				try {
@@ -93,6 +96,7 @@ class PresentationDisplaysPlugin :
 			val obj = JSONObject(call.arguments as String)
 			val displayId = obj.getInt("displayId")
 			val routeTag = obj.getString("routerName")
+			val recreateEngine = obj.optBoolean("recreateEngine", false)
 			val display = displayManager?.getDisplay(displayId)
 
 			if (display == null) {
@@ -104,6 +108,10 @@ class PresentationDisplaysPlugin :
 			// to the shared cached engine. Building a new one on top of it would attach a
 			// second view to the same engine and leave a dead window on the display.
 			dismissPresentation()
+
+			if (recreateEngine) {
+				destroyCachedEngine(routeTag)
+			}
 
 			val flutterEngine = createFlutterEngine(routeTag)
 
@@ -137,13 +145,13 @@ class PresentationDisplaysPlugin :
 			newPresentation.show()
 			presentation = newPresentation
 
-			Log.i(LOG_TAG, "presentation shown on displayId=$displayId")
+			PresentationDisplaysLog.i { "presentation shown on displayId=$displayId" }
 
 			result.success(true)
 		} catch (e: Exception) {
 			// Reported as a failure instead of success(true) so the Dart side can tell a
 			// shown presentation from one that never made it onto the display.
-			Log.e(LOG_TAG, "showPresentation failed: ${e.message}")
+			PresentationDisplaysLog.e("showPresentation failed: ${e.message}")
 			result.error(call.method, e.message, null)
 		}
 	}
@@ -151,12 +159,31 @@ class PresentationDisplaysPlugin :
 	private fun dismissPresentation() {
 		presentation?.let { current ->
 			try {
+				// Released first: dismiss() may stop the dialog only later (see release()), when
+				// the next presentation already uses the shared engine.
+				current.release()
 				current.dismiss()
 			} catch (e: Exception) {
-				Log.w(LOG_TAG, "Failed to dismiss presentation: ${e.message}")
+				PresentationDisplaysLog.w("Failed to dismiss presentation: ${e.message}")
 			}
 		}
 		presentation = null
+	}
+
+	/**
+	 * Drops the cached engine, so the next show() starts the secondary entry point anew. The
+	 * engine is otherwise kept for the whole process, and an engine whose isolate died - killed
+	 * by a hot restart, or by a fatal error - would be reused by every later show() and the
+	 * display would stay dead until the app restarts.
+	 */
+	private fun destroyCachedEngine(tag: String) {
+		val engine = FlutterEngineCache.getInstance().get(tag) ?: return
+
+		FlutterEngineCache.getInstance().remove(tag)
+		flutterEngineChannel = null
+		engine.destroy()
+
+		PresentationDisplaysLog.i { "engine $tag destroyed" }
 	}
 
 	private fun createFlutterEngine(tag: String): FlutterEngine? {
@@ -210,7 +237,6 @@ class PresentationDisplaysPlugin :
 	}
 
 	companion object {
-		private const val LOG_TAG = "PresentationDisplays"
 		private const val VIEW_TYPE_ID = "presentation_displays_plugin"
 		private const val VIEW_TYPE_EVENTS_ID = "presentation_displays_plugin_events"
 		private const val MAIN_DISPLAY_CHANNEL = "main_display_channel"

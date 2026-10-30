@@ -13,6 +13,7 @@ const _showPresentation = "showPresentation";
 const _hidePresentation = "hidePresentation";
 const _transferDataToPresentation = "transferDataToPresentation";
 const _transferDataToMain = "transferDataToMain";
+const _setLoggingEnabled = "setLoggingEnabled";
 
 /// Display category: secondary display.
 /// <p>
@@ -48,6 +49,17 @@ class DisplayManager {
     _displayMethodChannel = MethodChannel(_displayMethodChannelId);
     _displayEventChannel = EventChannel(_displayEventChannelId);
     _mainMethodChannel = MethodChannel(_mainChannel);
+  }
+
+  /// Turns the plugin's informational log on or off - the method calls and the data
+  /// passed to the presentation. Off by default: that data is whatever the app shows on
+  /// the secondary display and does not belong in the log of a release build. Warnings
+  /// and errors are logged either way and never carry it.
+  ///
+  /// One switch for the whole process, the presentation's engine included. Only Android
+  /// writes a log; on iOS the call does nothing.
+  Future<void> setLoggingEnabled(bool enabled) async {
+    await _displayMethodChannel?.invokeMethod<void>(_setLoggingEnabled, enabled);
   }
 
   /// Gets all currently valid logical displays of the specified category.
@@ -119,14 +131,22 @@ class DisplayManager {
   /// [routerName] The screen you want to display on the secondary display.
   /// </P>
   ///
+  /// [recreateEngine] drops the engine kept from an earlier show and starts the secondary
+  /// entry point anew. The engine is otherwise reused for the whole process, so one whose
+  /// isolate died - killed by a hot restart, or by a fatal error - would leave every later
+  /// show dead too.
+  ///
   /// return [Future<bool>] about the status has been display or not
   Future<bool?>? showSecondaryDisplay(
-      {required int displayId, required String routerName}) async {
+      {required int displayId,
+      required String routerName,
+      bool recreateEngine = false}) async {
     return await _displayMethodChannel?.invokeMethod<bool?>(
         _showPresentation,
         "{"
         "\"displayId\": $displayId,"
-        "\"routerName\": \"$routerName\""
+        "\"routerName\": \"$routerName\","
+        "\"recreateEngine\": $recreateEngine"
         "}");
   }
 
