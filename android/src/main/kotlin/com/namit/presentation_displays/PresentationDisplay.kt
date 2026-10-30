@@ -65,16 +65,31 @@ class PresentationDisplay(
 
     override fun onStop() {
         // Android dismisses a presentation on its own when its display is removed or
-        // reconfigured, not only when dismiss() is called. Without detaching here the
+        // reconfigured, not only when dismiss() is called. Without releasing here the
         // FlutterView stays attached to the shared cached engine and the next show()
         // attaches a second view to the same engine.
+        release()
+
+        super.onStop()
+    }
+
+    /**
+     * Lets go of the shared cached engine: detaches the FlutterView and clears the handler
+     * of the channel back to the main display. Safe to call more than once.
+     *
+     * Has to run before dismiss() when a new presentation takes over. dismiss() does not
+     * always stop the dialog at once - with the soft keyboard up Android defers it until
+     * the keyboard hides ("Async dismiss ... after IME hide"). By then the new presentation
+     * is attached to the same engine and has set its own handler on the same channel, and a
+     * late onStop would detach the engine from the new view and clear the new handler: the
+     * display goes dark and its heartbeat stops.
+     */
+    fun release() {
         flutterView?.detachFromFlutterEngine()
         flutterView = null
 
         mainChannel?.setMethodCallHandler(null)
         mainChannel = null
-
-        super.onStop()
     }
 
     companion object {

@@ -1,3 +1,9 @@
+## 1.1.1
+* Android: a presentation lets go of the shared engine before it is dismissed. With the soft
+  keyboard up Android defers the dismissal until the keyboard hides; the late `onStop` then
+  detached the engine from the presentation shown in the meantime and cleared its channel
+  back to the main display, so the secondary display went dark and stopped answering.
+
 ## 1.0.0
 * Able to package android release build. Works fine in example app.
 

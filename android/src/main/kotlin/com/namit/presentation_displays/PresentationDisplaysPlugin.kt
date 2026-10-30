@@ -151,6 +151,9 @@ class PresentationDisplaysPlugin :
 	private fun dismissPresentation() {
 		presentation?.let { current ->
 			try {
+				// Released first: dismiss() may stop the dialog only later (see release()), when
+				// the next presentation already uses the shared engine.
+				current.release()
 				current.dismiss()
 			} catch (e: Exception) {
 				Log.w(LOG_TAG, "Failed to dismiss presentation: ${e.message}")
