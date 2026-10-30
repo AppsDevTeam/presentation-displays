@@ -3,7 +3,6 @@ package com.namit.presentation_displays
 import android.app.Presentation
 import android.content.Context
 import android.os.Bundle
-import android.util.Log
 import android.view.Display
 import android.view.ViewGroup
 import android.widget.FrameLayout
@@ -36,7 +35,7 @@ class PresentationDisplay(
         val flutterEngine = FlutterEngineCache.getInstance().get(tag)
 
         if (flutterEngine == null) {
-            Log.e(LOG_TAG, "Can't find the FlutterEngine with cache name $tag")
+            PresentationDisplaysLog.e("Can't find the FlutterEngine with cache name $tag")
             return
         }
 
@@ -93,7 +92,6 @@ class PresentationDisplay(
     }
 
     companion object {
-        private const val LOG_TAG = "PresentationDisplay"
         private const val MAIN_DISPLAY_CHANNEL = "main_display_channel"
     }
 }

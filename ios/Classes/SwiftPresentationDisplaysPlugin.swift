@@ -81,6 +81,10 @@ public class SwiftPresentationDisplaysPlugin: NSObject, FlutterPlugin {
             flutterEngineChannel?.invokeMethod("DataTransfer", arguments: call.arguments)
             result(true)
 
+        case "setLoggingEnabled":
+            // The iOS side writes no log of its own; accepted so the call works on both platforms.
+            result(nil)
+
         default:
             result(FlutterMethodNotImplemented)
         }

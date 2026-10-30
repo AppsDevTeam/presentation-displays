@@ -5,7 +5,6 @@ import android.content.Context
 import android.hardware.display.DisplayManager
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
 import android.view.Display
 import androidx.annotation.NonNull
 import com.google.gson.Gson
@@ -55,9 +54,13 @@ class PresentationDisplaysPlugin :
 	}
 
 	override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
-		Log.i(LOG_TAG, "Channel: method: ${call.method} | arguments: ${call.arguments}")
+		PresentationDisplaysLog.i { "Channel: method: ${call.method} | arguments: ${call.arguments}" }
 
 		when (call.method) {
+			"setLoggingEnabled" -> {
+				PresentationDisplaysLog.enabled = call.arguments as? Boolean ?: false
+				result.success(null)
+			}
 			"showPresentation" -> showPresentation(call, result)
 			"hidePresentation" -> {
 				try {
@@ -137,13 +140,13 @@ class PresentationDisplaysPlugin :
 			newPresentation.show()
 			presentation = newPresentation
 
-			Log.i(LOG_TAG, "presentation shown on displayId=$displayId")
+			PresentationDisplaysLog.i { "presentation shown on displayId=$displayId" }
 
 			result.success(true)
 		} catch (e: Exception) {
 			// Reported as a failure instead of success(true) so the Dart side can tell a
 			// shown presentation from one that never made it onto the display.
-			Log.e(LOG_TAG, "showPresentation failed: ${e.message}")
+			PresentationDisplaysLog.e("showPresentation failed: ${e.message}")
 			result.error(call.method, e.message, null)
 		}
 	}
@@ -156,7 +159,7 @@ class PresentationDisplaysPlugin :
 				current.release()
 				current.dismiss()
 			} catch (e: Exception) {
-				Log.w(LOG_TAG, "Failed to dismiss presentation: ${e.message}")
+				PresentationDisplaysLog.w("Failed to dismiss presentation: ${e.message}")
 			}
 		}
 		presentation = null
@@ -213,7 +216,6 @@ class PresentationDisplaysPlugin :
 	}
 
 	companion object {
-		private const val LOG_TAG = "PresentationDisplays"
 		private const val VIEW_TYPE_ID = "presentation_displays_plugin"
 		private const val VIEW_TYPE_EVENTS_ID = "presentation_displays_plugin_events"
 		private const val MAIN_DISPLAY_CHANNEL = "main_display_channel"

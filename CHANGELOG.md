@@ -3,6 +3,10 @@
   keyboard up Android defers the dismissal until the keyboard hides; the late `onStop` then
   detached the engine from the presentation shown in the meantime and cleared its channel
   back to the main display, so the secondary display went dark and stopped answering.
+* The plugin's informational logcat lines (method calls with their data, presentation shown)
+  are off unless the app turns them on with `DisplayManager.setLoggingEnabled(true)`. The data
+  passed to the presentation no longer ends up in the log of a release build. Warnings and
+  errors are logged as before.
 
 ## 1.0.0
 * Able to package android release build. Works fine in example app.
