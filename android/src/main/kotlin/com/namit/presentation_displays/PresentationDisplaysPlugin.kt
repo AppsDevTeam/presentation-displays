@@ -96,6 +96,7 @@ class PresentationDisplaysPlugin :
 			val obj = JSONObject(call.arguments as String)
 			val displayId = obj.getInt("displayId")
 			val routeTag = obj.getString("routerName")
+			val recreateEngine = obj.optBoolean("recreateEngine", false)
 			val display = displayManager?.getDisplay(displayId)
 
 			if (display == null) {
@@ -107,6 +108,10 @@ class PresentationDisplaysPlugin :
 			// to the shared cached engine. Building a new one on top of it would attach a
 			// second view to the same engine and leave a dead window on the display.
 			dismissPresentation()
+
+			if (recreateEngine) {
+				destroyCachedEngine(routeTag)
+			}
 
 			val flutterEngine = createFlutterEngine(routeTag)
 
@@ -163,6 +168,22 @@ class PresentationDisplaysPlugin :
 			}
 		}
 		presentation = null
+	}
+
+	/**
+	 * Drops the cached engine, so the next show() starts the secondary entry point anew. The
+	 * engine is otherwise kept for the whole process, and an engine whose isolate died - killed
+	 * by a hot restart, or by a fatal error - would be reused by every later show() and the
+	 * display would stay dead until the app restarts.
+	 */
+	private fun destroyCachedEngine(tag: String) {
+		val engine = FlutterEngineCache.getInstance().get(tag) ?: return
+
+		FlutterEngineCache.getInstance().remove(tag)
+		flutterEngineChannel = null
+		engine.destroy()
+
+		PresentationDisplaysLog.i { "engine $tag destroyed" }
 	}
 
 	private fun createFlutterEngine(tag: String): FlutterEngine? {

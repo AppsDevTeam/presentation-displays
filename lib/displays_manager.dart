@@ -131,14 +131,22 @@ class DisplayManager {
   /// [routerName] The screen you want to display on the secondary display.
   /// </P>
   ///
+  /// [recreateEngine] drops the engine kept from an earlier show and starts the secondary
+  /// entry point anew. The engine is otherwise reused for the whole process, so one whose
+  /// isolate died - killed by a hot restart, or by a fatal error - would leave every later
+  /// show dead too.
+  ///
   /// return [Future<bool>] about the status has been display or not
   Future<bool?>? showSecondaryDisplay(
-      {required int displayId, required String routerName}) async {
+      {required int displayId,
+      required String routerName,
+      bool recreateEngine = false}) async {
     return await _displayMethodChannel?.invokeMethod<bool?>(
         _showPresentation,
         "{"
         "\"displayId\": $displayId,"
-        "\"routerName\": \"$routerName\""
+        "\"routerName\": \"$routerName\","
+        "\"recreateEngine\": $recreateEngine"
         "}");
   }
 

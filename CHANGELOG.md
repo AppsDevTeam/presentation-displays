@@ -7,6 +7,9 @@
   are off unless the app turns them on with `DisplayManager.setLoggingEnabled(true)`. The data
   passed to the presentation no longer ends up in the log of a release build. Warnings and
   errors are logged as before.
+* `showSecondaryDisplay(..., recreateEngine: true)` drops the engine kept from an earlier show
+  and starts the secondary entry point anew. Without it an engine whose isolate died was reused
+  by every later show and the display stayed dead until the app restarted.
 
 ## 1.0.0
 * Able to package android release build. Works fine in example app.
